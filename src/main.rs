@@ -66,7 +66,6 @@ println!("R9 (offset): {}", regs.r9);
         // Read the syscall result (allocated address)
         ptrace(PTRACE_GETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &mut regs);
 
-        ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &original_regs);
 
 println!("After syscall:");
 println!("RAX: 0x{:x}", regs.rax);
@@ -84,6 +83,9 @@ println!("R9 (offset): {}", regs.r9);
         }
 
         // Restore original registers
+        ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &original_regs);
+        ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &original_regs);
+
 
         // Detach from the process
         ptrace(PTRACE_DETACH, target_pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>());

@@ -1,0 +1,8 @@
+[package]
+name = "rust-inject-nix"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libc = "0.2.169"
+sysinfo = "0.33.1"

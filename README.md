@@ -4,7 +4,7 @@ This Rust project demonstrates how to inject shellcode into a target process usi
 
 ## Features
 
-- Attach to a target process using `ptrace`. (By default this is the `sleep`` command. Modify the process_name variable to target a different process.)
+- Attach to a target process using `ptrace`. (By default this is the `sleep` command. Modify the `PROCESS_NAME` constant to target a different process.)
 - Allocate executable memory in the target process using the `mmap` system call.
 - Write shellcode into the allocated memory using `PTRACE_POKETEXT`.
 - Modify the instruction pointer (`RIP`) to execute the injected shellcode.

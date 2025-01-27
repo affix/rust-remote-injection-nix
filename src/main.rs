@@ -20,7 +20,6 @@ fn allocate_remote_memory(target_pid: pid_t, size: usize) -> Result<u64, io::Err
         let mut regs: user_regs_struct = std::mem::zeroed();
         ptrace(PTRACE_GETREGS, target_pid, std::ptr::null_mut::<libc::c_void>(), &mut regs);
 
-
         // Store a backup of the original registers
         let original_regs = regs;
 

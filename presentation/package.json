@@ -1,0 +1,17 @@
+{
+  "name": "a-primer-on-unix--not-macos--process-injection",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "slidev build",
+    "dev": "slidev --open",
+    "export": "slidev export"
+  },
+  "dependencies": {
+    "@slidev/cli": "^51.3.0",
+    "@slidev/theme-default": "latest",
+    "@slidev/theme-seriph": "latest",
+    "slidev-theme-the-unnamed": "^0.0.22",
+    "vue": "^3.5.13"
+  }
+}

@@ -23,9 +23,22 @@ A Primer by Keiran Smith
   </a>
 </div>
 
-<!--
-The last comment block of each slide will be treated as slide notes. It will be visible and editable in Presenter Mode along with the slide. [Read more in the docs](https://sli.dev/guide/syntax.html#notes)
--->
+
+--- #2
+layout: about-me
+
+helloMsg: Hi I'm Affix!
+name: Keiran Smith
+imageSrc: https://i.ibb.co/3905TGKW/me-lambo.jpg
+position: left
+job: Lead Penetration Tester
+line1: N-able
+line2: OSCP, OSWE, OSEP, OSED, OSCE3
+social1: @AffixSec
+social2: https://keiran.scot
+
+---
+
 
 --- #2
 
@@ -38,11 +51,16 @@ Simply put, Process injection allows an attacker to run their code in the contex
 
 # Why is it possible?
 
+</div>
+
+<v-clicks>
+
 - Debugging
 - Instrumentation
 - Security and Forensics
 - Inter Process Communication (IPC)
-</div>
+
+</v-clicks>
 
 --- #3
 
@@ -122,42 +140,25 @@ layout: center
 
 In Unix, ptrace is a syscall that provides a way for a parent process to observe and control the execution of another process.
 
-It is used by debuggers and other code analysis tools to inspect and <span v-mark="{at: 2, type: 'circle', color: 'orange'}">manipulate the execution</span> of a process.
+It is used by debuggers and other code analysis tools to inspect and <span v-mark="{at: 1, type: 'circle', color: 'orange'}">manipulate the execution</span> of a process.
 
 --- #8
 
 # Unix Hurdles to Overcome
 
-<div v-click>
+<v-clicks>
 
 - Finding a Target Process by name is tedious
   - This involved inspecting the `/proc` tree and looping through each process to find the `cmdline` file.
   - I'll be making use of a library to do this
-</div>
-
-<div v-click>
-
 - Allocating remote memory involves using `mmap`
   - To make this syscall we need to setup the registers manually then single step the execution of the target process.
   - `rax`, `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` are all used to pass arguments to the syscall.
-</div>
-
-<div v-click>
-
 - Writing the shellcode to the memory needs to be done carefully.
   - This is done in chumks of 8 bytes at a time using `PTRACE_POKEDATA`.
-</div>
-
-<div v-click>
-
 - Executing the shellcode is done by setting the value of `RIP` to the address of the injected shellcode.
-</div>
-
-<div v-click>
-
 - I'm doing this in Rust using the libc crate
-  - The ptrace syscalls are syntactically similar to the C version
-</div>
+</v-clicks>
 
 --- #9
 
@@ -391,6 +392,31 @@ Now that the memory size is aligned with the page size we can allocate the memor
       waitpid(target_pid, std::ptr::null_mut(), 0);
       ...
 ```
+
+--- #18
+
+# BSD Caveat!
+
+In BSD there are some slight differences
+
+<v-clicks>
+
+- The `PTRACE_*` constants are instead defined as `PT_*`
+- Each register follows the BSD Naming convention 
+  - `r_rax` instead of `rax`
+  - `r_rdi` instad of `rdi`
+  - `r_r8` instead of `r8`
+- The opcode `0x050f` becomes `0x0f05` for `SYSCALL`
+- `libc::MAP_ANONYMOUS` should become `libc::MAP_ANON`
+
+</v-clicks>
+
+<v-click>
+
+The final code in github reflects these changes and is using a rust module importing `freebsd` and `linux` as injector, Some BSD Variants may have different conventions.
+
+</v-click>
+
 --- #18
 
 # Allocate memory in the target process
